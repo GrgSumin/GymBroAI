@@ -12,6 +12,7 @@ type ChatState = {
   error: string | null;
   setChats: (chats: ChatPreview[]) => void;
   addChat: (chat: ChatPreview) => void;
+  removeChat: (chatId: string) => void;
   setMessages: (messages: ChatMessage[]) => void;
   appendMessage: (message: ChatMessage) => void;
   setActiveChatId: (chatId: string | null) => void;
@@ -35,6 +36,7 @@ export const useChatStore = create<ChatState>((set) => ({
   error: null,
   setChats: (chats) => set({ chats }),
   addChat: (chat) => set((state) => ({ chats: [chat, ...state.chats] })),
+  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((chat) => chat.id !== chatId) })),
   setMessages: (messages) => set({ messages }),
   appendMessage: (message) =>
     set((state) => ({

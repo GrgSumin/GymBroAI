@@ -2,7 +2,7 @@
 
 import type { ChatPreview } from "@/app/types/chat";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 
 type ChatSidebarProps = {
   chats: ChatPreview[];
@@ -10,6 +10,7 @@ type ChatSidebarProps = {
   loading: boolean;
   onCreateChat: () => void;
   onSelectChat: (chatId: string) => void;
+  onDeleteChat: (chatId: string) => void;
 };
 
 export function ChatSidebar({
@@ -18,6 +19,7 @@ export function ChatSidebar({
   loading,
   onCreateChat,
   onSelectChat,
+  onDeleteChat,
 }: ChatSidebarProps) {
   return (
     <aside className="flex h-full w-full max-w-80 flex-col rounded-4xl bg-zinc-900 p-3 shadow-[0_16px_34px_rgba(0,0,0,0.38)]">
@@ -40,25 +42,36 @@ export function ChatSidebar({
             const isActive = activeChatId === chat.id;
 
             return (
-              <button
+              <div
                 key={chat.id}
-                type="button"
-                onClick={() => onSelectChat(chat.id)}
-                className={`w-full rounded-2xl px-3 py-2 text-left transition focus-visible:ring-2 focus-visible:ring-orange-200 focus-visible:outline-none ${
-                  isActive
-                    ? "bg-[#24170f] text-orange-50"
-                    : "bg-zinc-950 text-slate-100 hover:bg-zinc-900"
+                className={`flex items-start gap-2 rounded-2xl px-2 py-2 transition ${
+                  isActive ? "bg-[#24170f]" : "bg-zinc-950 hover:bg-zinc-900"
                 }`}
               >
-                <p className="truncate text-sm font-semibold">{chat.title}</p>
-                <p
-                  className={`truncate text-xs ${
-                    isActive ? "text-orange-100/85" : "text-slate-300/70"
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => onSelectChat(chat.id)}
+                  className="min-w-0 flex-1 rounded-xl px-1 text-left text-slate-100 focus-visible:ring-2 focus-visible:ring-orange-200 focus-visible:outline-none"
                 >
-                  {chat.preview || "No messages yet"}
-                </p>
-              </button>
+                  <p className="truncate text-sm font-semibold">{chat.title}</p>
+                  <p
+                    className={`truncate text-xs ${
+                      isActive ? "text-orange-100/85" : "text-slate-300/70"
+                    }`}
+                  >
+                    {chat.preview || "No messages yet"}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onDeleteChat(chat.id)}
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-zinc-800 hover:text-rose-300 focus-visible:ring-2 focus-visible:ring-rose-300 focus-visible:outline-none"
+                  aria-label={`Delete ${chat.title}`}
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              </div>
             );
           })
         )}
