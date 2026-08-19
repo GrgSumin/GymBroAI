@@ -8,7 +8,7 @@ Operational guide for coding agents working in this repository.
 - Styling: Tailwind CSS v4 + `tw-animate-css` + utility helper `cn()`.
 - Auth: Clerk (`@clerk/nextjs`) with route protection in `middleware.ts`.
 - Data: Prisma 7 + PostgreSQL (`@prisma/adapter-pg`, `pg`).
-- AI integration: Ollama local API (`llama3.2:latest`) in API route handlers.
+- AI integration: Google Gemini REST API (`gemini-2.0-flash` by default) in API route handlers.
 - State: local React state + Zustand store (`app/chatStore.ts`).
 
 ## Source of Truth Checked
@@ -20,24 +20,26 @@ Operational guide for coding agents working in this repository.
 
 ## Install and Run
 
-- Install deps: `npm install`
-- Start dev server: `npm run dev`
-- Production build: `npm run build`
-- Start production server: `npm run start`
-- Lint entire repo: `npm run lint`
+Package manager is **yarn** (only `yarn.lock` is committed).
+
+- Install deps: `yarn install`
+- Start dev server: `yarn dev`
+- Production build: `yarn build`
+- Start production server: `yarn start`
+- Lint entire repo: `yarn lint`
 
 ## Build, Lint, and Test Commands
 
 ### Build
 
-- Validate production compile: `npm run build`
+- Validate production compile: `yarn build`
 - Run build after structural routing/API/schema changes.
 
 ### Lint
 
-- Full lint: `npm run lint`
-- Lint a specific file: `npx eslint app/api/user-thread/route.ts`
-- Lint and auto-fix: `npx eslint . --fix`
+- Full lint: `yarn lint`
+- Lint a specific file: `yarn eslint app/api/user-thread/route.ts`
+- Lint and auto-fix: `yarn eslint . --fix`
 
 ### Tests (Current State)
 
@@ -47,26 +49,26 @@ Operational guide for coding agents working in this repository.
 
 ### Single-Test Guidance (When Tests Exist)
 
-- If project adopts Vitest, single file: `npx vitest run path/to/file.test.ts`
-- If project adopts Vitest, single test name: `npx vitest run path/to/file.test.ts -t "case name"`
-- If project adopts Jest, single file: `npx jest path/to/file.test.ts`
-- If project adopts Jest, single test name: `npx jest path/to/file.test.ts -t "case name"`
+- If project adopts Vitest, single file: `yarn vitest run path/to/file.test.ts`
+- If project adopts Vitest, single test name: `yarn vitest run path/to/file.test.ts -t "case name"`
+- If project adopts Jest, single file: `yarn jest path/to/file.test.ts`
+- If project adopts Jest, single test name: `yarn jest path/to/file.test.ts -t "case name"`
 - Prefer the script in `package.json` once it exists (for CI parity).
 
 ## Prisma and Database Commands
 
-- Generate client: `npx prisma generate`
-- Create/apply local migration: `npx prisma migrate dev --name <migration_name>`
-- Apply migrations (non-interactive): `npx prisma migrate deploy`
-- Open Prisma Studio: `npx prisma studio`
+- Generate client: `yarn prisma generate`
+- Create/apply local migration: `yarn prisma migrate dev --name <migration_name>`
+- Apply migrations (non-interactive): `yarn prisma migrate deploy`
+- Open Prisma Studio: `yarn prisma studio`
 - Prisma config lives in `prisma.config.ts` and reads env vars.
 
 ## Environment Requirements
 
 - Required for DB: `DATABASE_URL`
 - Used by Prisma config: `DIRECT_URL` (shadow DB URL)
-- Optional for Ollama host override: `OLLAMA_BASE_URL` (defaults to `http://127.0.0.1:11434`)
-- Optional for model override: `LLAMA_MODEL` (defaults to `llama3.2:latest`)
+- Required for AI: `GEMINI_API_KEY` (get a free key at https://aistudio.google.com/apikey)
+- Optional for model override: `GEMINI_MODEL` (defaults to `gemini-2.0-flash`)
 - Required by Clerk runtime/middleware: Clerk environment variables.
 - Never commit `.env` values or secrets to source control.
 
@@ -148,8 +150,8 @@ Operational guide for coding agents working in this repository.
 
 ## Pre-PR / Pre-Commit Checklist for Agents
 
-- Run `npm run lint` and fix actionable issues.
-- Run `npm run build` for significant routing/server/config/schema changes.
+- Run `yarn lint` and fix actionable issues.
+- Run `yarn build` for significant routing/server/config/schema changes.
 - If tests are added later, run the smallest relevant test scope first.
 - Confirm no secrets, tokens, or `.env` values are included in diffs.
 - Keep changes scoped to the requested task.
