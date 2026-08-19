@@ -59,6 +59,7 @@ export default function ChatPage() {
     error,
     setChats,
     addChat,
+    removeChat,
     setMessages,
     appendMessage,
     setActiveChatId,
@@ -69,6 +70,21 @@ export default function ChatPage() {
     appendStreamDraft,
     setError,
   } = useChatStore();
+
+  const fetchChats = useCallback(async () => {
+    const response = await fetch("/api/chats", {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    const data = (await response.json()) as ApiResponse<{ chats: ChatPreview[] }>;
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.success ? "Unable to load chats." : data.error.message);
+    }
+
+    return data.data.chats;
+  }, []);
 
   const sortedChats = useMemo(
     () =>
@@ -137,18 +153,7 @@ export default function ChatPage() {
     setError(null);
 
     try {
-      const response = await fetch("/api/chats", {
-        method: "GET",
-        cache: "no-store",
-      });
-
-      const data = (await response.json()) as ApiResponse<{ chats: ChatPreview[] }>;
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.success ? "Unable to load chats." : data.error.message);
-      }
-
-      const fetchedChats = data.data.chats;
+      const fetchedChats = await fetchChats();
       setChats(fetchedChats);
 
       const requestedChatId =
@@ -174,7 +179,16 @@ export default function ChatPage() {
     } finally {
       setIsLoadingChats(false);
     }
-  }, [createChat, loadMessages, router, setActiveChatId, setChats, setError, setIsLoadingChats]);
+  }, [
+    createChat,
+    fetchChats,
+    loadMessages,
+    router,
+    setActiveChatId,
+    setChats,
+    setError,
+    setIsLoadingChats,
+  ]);
 
   useEffect(() => {
     hydrateChats();
@@ -198,6 +212,62 @@ export default function ChatPage() {
       setError(message);
     }
   }, [createChat, setError]);
+
+  const handleDeleteChat = useCallback(
+    async (chatId: string) => {
+      const confirmed = window.confirm("Delete this chat permanently?");
+
+      if (!confirmed) {
+        return;
+      }
+
+      setError(null);
+
+      try {
+        const response = await fetch(`/api/chats/${chatId}`, {
+          method: "DELETE",
+        });
+
+        const data = (await response.json()) as ApiResponse<{ deleted: boolean }>;
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.success ? "Unable to delete chat." : data.error.message);
+        }
+
+        removeChat(chatId);
+
+        if (activeChatId !== chatId) {
+          return;
+        }
+
+        const remainingChats = sortedChats.filter((chat) => chat.id !== chatId);
+        const nextChat = remainingChats[0] ?? null;
+
+        if (nextChat) {
+          setActiveChatId(nextChat.id);
+          router.replace(`/chat?chat=${nextChat.id}`);
+          await loadMessages(nextChat.id);
+          return;
+        }
+
+        const createdChat = await createChat();
+        await loadMessages(createdChat.id);
+      } catch (deleteError) {
+        const message = deleteError instanceof Error ? deleteError.message : "Unable to delete chat.";
+        setError(message);
+      }
+    },
+    [
+      activeChatId,
+      createChat,
+      loadMessages,
+      removeChat,
+      router,
+      setActiveChatId,
+      setError,
+      sortedChats,
+    ]
+  );
 
   const stopStreaming = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -289,6 +359,8 @@ export default function ChatPage() {
           }
         }
 
+        const refreshedChats = await fetchChats();
+        setChats(refreshedChats);
         await loadMessages(activeChatId);
       } catch (sendError) {
         shouldRefreshMessages = true;
@@ -317,8 +389,10 @@ export default function ChatPage() {
       activeChatId,
       appendMessage,
       appendStreamDraft,
+      fetchChats,
       isStreaming,
       loadMessages,
+      setChats,
       setError,
       setIsStreaming,
       setStreamDraft,
@@ -334,6 +408,7 @@ export default function ChatPage() {
           loading={isLoadingChats}
           onCreateChat={handleCreateChat}
           onSelectChat={handleSelectChat}
+          onDeleteChat={handleDeleteChat}
         />
 
         <section className="relative flex min-h-0 flex-col rounded-4xl bg-zinc-900 p-3 shadow-[0_16px_40px_rgba(0,0,0,0.38)]">
