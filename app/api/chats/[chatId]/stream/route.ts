@@ -1,5 +1,9 @@
 import { fail, requireUserId } from "@/lib/api";
-import { createLlamaGenerateStream, type LlamaGenerateChunk } from "@/lib/llama";
+import {
+  generateText,
+  streamCoachReply,
+  type CoachTurn,
+} from "@/lib/llama";
 import { prisma } from "@/lib/prisma";
 
 type Params = {
@@ -8,11 +12,6 @@ type Params = {
 
 type StreamRequest = {
   message: string;
-};
-
-type PersistedMessage = {
-  role: "user" | "assistant";
-  content: string;
 };
 
 const encoder = new TextEncoder();
@@ -28,12 +27,24 @@ const COACH_INSTRUCTIONS = [
   "Never provide dangerous advice or medical diagnoses.",
 ].join(" ");
 
-function toConversationPrompt(messages: PersistedMessage[]) {
-  const transcript = messages
-    .map((message) => `${message.role === "assistant" ? "Coach" : "User"}: ${message.content}`)
-    .join("\n");
+const DEFAULT_CHAT_TITLE = "New Plan";
 
-  return `Conversation so far:\n${transcript}\nCoach:`;
+const TITLE_INSTRUCTIONS = [
+  "Generate a short title for a fitness coaching chat.",
+  "Return only the title with no quotes.",
+  "Keep it under 6 words and under 60 characters.",
+].join(" ");
+
+async function generateChatTitleFromMessage(message: string, signal: AbortSignal) {
+  const raw = await generateText(
+    `User message: ${message}\n\nChat title:`,
+    TITLE_INSTRUCTIONS,
+    signal
+  );
+
+  const firstLine = raw.split("\n")[0]?.trim() ?? "";
+  const withoutQuotes = firstLine.replace(/^['\"`]+|['\"`]+$/g, "").trim();
+  return withoutQuotes.slice(0, 60);
 }
 
 export async function POST(req: Request, { params }: Params) {
@@ -86,10 +97,22 @@ export async function POST(req: Request, { params }: Params) {
     },
   });
 
-  if (chat.title === "New Plan") {
+  if (chat.title === DEFAULT_CHAT_TITLE) {
+    let nextTitle = message.slice(0, 60);
+
+    try {
+      const aiTitle = await generateChatTitleFromMessage(message, req.signal);
+
+      if (aiTitle) {
+        nextTitle = aiTitle;
+      }
+    } catch {
+      nextTitle = message.slice(0, 60);
+    }
+
     await prisma.chat.update({
       where: { id: chatId },
-      data: { title: message.slice(0, 60) },
+      data: { title: nextTitle },
     });
   }
 
@@ -107,7 +130,7 @@ export async function POST(req: Request, { params }: Params) {
       content: true,
     },
   });
-  const history = recentHistory.reverse();
+  const history = recentHistory.reverse() as CoachTurn[];
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -123,127 +146,46 @@ export async function POST(req: Request, { params }: Params) {
       );
 
       let assistantContent = "";
-      let finished = false;
+
+      const persistAssistant = async () => {
+        if (!assistantContent.trim()) return;
+
+        await prisma.chatMessage.create({
+          data: {
+            chatId,
+            role: "assistant",
+            content: assistantContent,
+          },
+        });
+
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: { lastMessageAt: new Date() },
+        });
+      };
 
       try {
-        const body = await createLlamaGenerateStream(
-          toConversationPrompt(history as PersistedMessage[]),
+        for await (const chunk of streamCoachReply(
+          history,
           COACH_INSTRUCTIONS,
           req.signal
-        );
-        const reader = body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        const handleChunk = async (chunk: LlamaGenerateChunk) => {
-          const delta = chunk.response ?? "";
-
-          if (delta) {
-            assistantContent += delta;
-            controller.enqueue(sse("delta", { delta }));
-          }
-
-          if (chunk.done && !finished) {
-            finished = true;
-            const completedAt = new Date();
-
-            if (assistantContent.trim()) {
-              await prisma.chatMessage.create({
-                data: {
-                  chatId,
-                  role: "assistant",
-                  content: assistantContent,
-                },
-              });
-
-              await prisma.chat.update({
-                where: { id: chatId },
-                data: { lastMessageAt: completedAt },
-              });
-            }
-
-            controller.enqueue(
-              sse("done", {
-                content: assistantContent,
-              })
-            );
-          }
-        };
-
-        while (true) {
-          const { value, done } = await reader.read();
-
-          if (done) {
-            break;
-          }
-
-          if (req.signal.aborted) {
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-
-            if (!trimmed) {
-              continue;
-            }
-
-            const chunk = JSON.parse(trimmed) as LlamaGenerateChunk;
-            await handleChunk(chunk);
+        )) {
+          if (chunk.delta) {
+            assistantContent += chunk.delta;
+            controller.enqueue(sse("delta", { delta: chunk.delta }));
           }
         }
 
-        if (buffer.trim()) {
-          const chunk = JSON.parse(buffer.trim()) as LlamaGenerateChunk;
-          await handleChunk(chunk);
-        }
-
-        if (!finished && assistantContent.trim()) {
-          await prisma.chatMessage.create({
-            data: {
-              chatId,
-              role: "assistant",
-              content: assistantContent,
-            },
-          });
-
-          await prisma.chat.update({
-            where: { id: chatId },
-            data: { lastMessageAt: new Date() },
-          });
-
-          controller.enqueue(
-            sse("done", {
-              content: assistantContent,
-            })
-          );
-        }
-
+        await persistAssistant();
+        controller.enqueue(sse("done", { content: assistantContent }));
         controller.close();
       } catch (error) {
         console.error("Streaming failed", error);
 
-        if (assistantContent.trim()) {
-          try {
-            await prisma.chatMessage.create({
-              data: {
-                chatId,
-                role: "assistant",
-                content: assistantContent,
-              },
-            });
-
-            await prisma.chat.update({
-              where: { id: chatId },
-              data: { lastMessageAt: new Date() },
-            });
-          } catch (persistError) {
-            console.error("Failed to persist partial assistant message", persistError);
-          }
+        try {
+          await persistAssistant();
+        } catch (persistError) {
+          console.error("Failed to persist partial assistant message", persistError);
         }
 
         controller.enqueue(
