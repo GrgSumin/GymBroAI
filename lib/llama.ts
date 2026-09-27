@@ -41,6 +41,28 @@ function extractText(candidates: GeminiCandidate[] | undefined) {
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
 
+// Gemini delimits SSE events with CRLF; accept LF too so either wire format works.
+const SSE_EVENT_DELIMITER = /\r?\n\r?\n/;
+const SSE_LINE_DELIMITER = /\r?\n/;
+
+function readEventText(event: string) {
+  const dataLine = event
+    .split(SSE_LINE_DELIMITER)
+    .find((line) => line.startsWith("data:"));
+  if (!dataLine) return "";
+
+  const payload = dataLine.slice(5).trim();
+  if (!payload || payload === "[DONE]") return "";
+
+  try {
+    const chunk = JSON.parse(payload) as GeminiStreamChunk;
+    return extractText(chunk.candidates);
+  } catch {
+    // A truncated frame is not fatal; the next read will carry the rest.
+    return "";
+  }
+}
+
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     const onAbort = () => {
@@ -121,24 +143,21 @@ export async function* streamCoachReply(
       if (signal?.aborted) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split("\n\n");
+      const events = buffer.split(SSE_EVENT_DELIMITER);
       buffer = events.pop() ?? "";
 
       for (const event of events) {
-        const dataLine = event
-          .split("\n")
-          .find((line) => line.startsWith("data:"));
-        if (!dataLine) continue;
-
-        const payload = dataLine.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-
-        const chunk = JSON.parse(payload) as GeminiStreamChunk;
-        const text = extractText(chunk.candidates);
+        const text = readEventText(event);
         if (text) {
           yield { delta: text, done: false };
         }
       }
+    }
+
+    // Flush a final event that arrived without a trailing delimiter.
+    const tail = readEventText(buffer);
+    if (tail) {
+      yield { delta: tail, done: false };
     }
   } finally {
     reader.releaseLock();
