@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Activity, CalendarDays, Flame, MessageSquare, Sparkles } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 function formatShortDate(date: Date | null) {
   if (!date) {
@@ -25,6 +27,77 @@ function formatJoinedDate(date: Date | null) {
     month: "long",
     year: "numeric",
   }).format(date);
+}
+
+/** The later of two nullable dates, or whichever one exists. */
+function latestOf(a: Date | null, b: Date | null) {
+  if (!a) {
+    return b;
+  }
+
+  if (!b) {
+    return a;
+  }
+
+  return a > b ? a : b;
+}
+
+/** First letters of the first two words, e.g. "Sam Reed" → "SR". */
+function initialsOf(displayName: string) {
+  return displayName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((name) => name[0]?.toUpperCase())
+    .join("");
+}
+
+type StatCardProps = {
+  icon: LucideIcon;
+  label: string;
+  /** Rendered large; pass `small` for text-length values like dates. */
+  value: ReactNode;
+  small?: boolean;
+  hint?: string;
+};
+
+function StatCard({ icon: Icon, label, value, small = false, hint }: StatCardProps) {
+  return (
+    <div className="rounded-2xl bg-zinc-900 p-4 shadow-sm">
+      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300/75">
+        <Icon aria-hidden="true" className="size-3.5" />
+        {label}
+      </p>
+      <p className={`mt-2 font-semibold text-slate-50 ${small ? "text-lg" : "text-3xl"}`}>{value}</p>
+      {hint ? <p className="text-xs text-slate-300/75">{hint}</p> : null}
+    </div>
+  );
+}
+
+type RecentChatRowProps = {
+  chatId: string;
+  title: string;
+  preview: string;
+  activeAt: Date;
+};
+
+function RecentChatRow({ chatId, title, preview, activeAt }: RecentChatRowProps) {
+  return (
+    <Link
+      href={`/chat?chat=${chatId}`}
+      className="block rounded-2xl bg-zinc-950 px-4 py-3 transition hover:bg-zinc-900"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium text-slate-50">{title}</p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-200/75">{preview}</p>
+        </div>
+        <p className="shrink-0 text-xs font-medium uppercase tracking-wide text-orange-100/75">
+          {formatShortDate(activeAt)}
+        </p>
+      </div>
+    </Link>
+  );
 }
 
 export default async function Page() {
@@ -60,31 +133,13 @@ export default async function Page() {
     }),
   ]);
 
-  const lastActiveDate = (() => {
-    const latestChatDate = latestChat?.updatedAt ?? null;
-    const latestMessageDate = latestMessage?.createdAt ?? null;
-
-    if (!latestChatDate) {
-      return latestMessageDate;
-    }
-
-    if (!latestMessageDate) {
-      return latestChatDate;
-    }
-
-    return latestChatDate > latestMessageDate ? latestChatDate : latestMessageDate;
-  })();
+  const lastActiveDate = latestOf(latestChat?.updatedAt ?? null, latestMessage?.createdAt ?? null);
 
   const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || "GymBro";
   const primaryEmail = user.emailAddresses.find((email) => email.id === user.primaryEmailAddressId)?.emailAddress;
   const profileImage = user.imageUrl;
   const joinedAt = user.createdAt ? new Date(user.createdAt) : null;
-  const initials = displayName
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((name) => name[0]?.toUpperCase())
-    .join("");
+  const initials = initialsOf(displayName);
 
   return (
     <div className="min-h-[calc(100dvh-56px)] bg-black p-4 sm:p-6">
@@ -139,76 +194,36 @@ export default async function Page() {
           </div>
         </section>
 
-         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl bg-zinc-900 p-4 shadow-sm">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300/75">
-              <Activity aria-hidden="true" className="size-3.5" />
-              Total Plans
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-slate-50">{chatCount}</p>
-          </div>
-
-          <div className="rounded-2xl bg-zinc-900 p-4 shadow-sm">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300/75">
-              <MessageSquare aria-hidden="true" className="size-3.5" />
-              Total Messages
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-slate-50">{messageCount}</p>
-          </div>
-
-          <div className="rounded-2xl bg-zinc-900 p-4 shadow-sm">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300/75">
-              <CalendarDays aria-hidden="true" className="size-3.5" />
-              Last Active
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-50">{formatShortDate(lastActiveDate)}</p>
-          </div>
-
-          <div className="rounded-2xl bg-zinc-900 p-4 shadow-sm">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300/75">
-              <Flame aria-hidden="true" className="size-3.5" />
-              Streak
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-slate-50">7</p>
-            <p className="text-xs text-slate-300/75">Daily check-ins this week</p>
-          </div>
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={Activity} label="Total Plans" value={chatCount} />
+          <StatCard icon={MessageSquare} label="Total Messages" value={messageCount} />
+          <StatCard icon={CalendarDays} label="Last Active" value={formatShortDate(lastActiveDate)} small />
+          <StatCard icon={Flame} label="Streak" value={7} hint="Daily check-ins this week" />
         </section>
 
         <section className="rounded-4xl bg-zinc-900 p-5 shadow-[0_16px_40px_rgba(0,0,0,0.35)] sm:p-7">
           <div className="flex items-center justify-between gap-3">
             <div>
-                <h2 className="text-lg font-semibold uppercase tracking-[0.08em] text-slate-50">Recent Activity</h2>
-                <p className="text-sm text-slate-200/75">Your latest coaching conversations and plan updates.</p>
+              <h2 className="text-lg font-semibold uppercase tracking-[0.08em] text-slate-50">Recent Activity</h2>
+              <p className="text-sm text-slate-200/75">Your latest coaching conversations and plan updates.</p>
             </div>
           </div>
 
           <div className="mt-4 space-y-2.5">
             {recentChats.length === 0 ? (
-                <div className="rounded-2xl bg-zinc-950 p-5 text-sm text-slate-200/80">
-                  No plans yet. Start your first coaching session to see activity here.
-                </div>
-              ) : (
-                recentChats.map((chat) => {
-                const preview = chat.messages[0]?.content || "No messages yet";
-
-                return (
-                  <Link
-                    href={`/chat?chat=${chat.id}`}
-                    key={chat.id}
-                    className="block rounded-2xl bg-zinc-950 px-4 py-3 transition hover:bg-zinc-900"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium text-slate-50">{chat.title}</p>
-                        <p className="mt-1 line-clamp-2 text-sm text-slate-200/75">{preview}</p>
-                      </div>
-                      <p className="shrink-0 text-xs font-medium uppercase tracking-wide text-orange-100/75">
-                        {formatShortDate(chat.lastMessageAt ?? chat.updatedAt)}
-                      </p>
-                    </div>
-                  </Link>
-                );
-              })
+              <div className="rounded-2xl bg-zinc-950 p-5 text-sm text-slate-200/80">
+                No plans yet. Start your first coaching session to see activity here.
+              </div>
+            ) : (
+              recentChats.map((chat) => (
+                <RecentChatRow
+                  key={chat.id}
+                  chatId={chat.id}
+                  title={chat.title}
+                  preview={chat.messages[0]?.content || "No messages yet"}
+                  activeAt={chat.lastMessageAt ?? chat.updatedAt}
+                />
+              ))
             )}
           </div>
         </section>

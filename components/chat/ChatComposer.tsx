@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Send, Square } from "lucide-react";
-import { FormEvent, KeyboardEvent, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useRef, useState } from "react";
 
 type ChatComposerProps = {
   disabled: boolean;
@@ -11,8 +11,24 @@ type ChatComposerProps = {
   onStop: () => void;
 };
 
+/** Grow the textarea with its content, capped by the `max-h-40` class. */
+function autoResize(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
 export function ChatComposer({ disabled, isStreaming, onSend, onStop }: ChatComposerProps) {
+  // Controlled on purpose: the send button's enabled state is derived from the
+  // trimmed value during render, so there is no mirrored state to keep in sync.
   const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const canSend = !disabled && value.trim().length > 0;
+
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    setValue(event.target.value);
+    autoResize(event.target);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,16 +40,21 @@ export function ChatComposer({ disabled, isStreaming, onSend, onStop }: ChatComp
     }
 
     setValue("");
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "";
+    }
+
     await onSend(text);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    const isComposing = event.nativeEvent.isComposing;
-
-    if (isComposing) {
+    // While an IME candidate window is open, Enter commits the composition.
+    if (event.nativeEvent.isComposing) {
       return;
     }
 
+    // Enter sends, Shift+Enter inserts a newline.
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
@@ -49,12 +70,14 @@ export function ChatComposer({ disabled, isStreaming, onSend, onStop }: ChatComp
         <textarea
           id="chat-input"
           name="chatInput"
+          ref={textareaRef}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Ask for your next session plan…"
           autoComplete="off"
+          enterKeyHint="send"
           className="max-h-40 min-h-11 min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-sm text-slate-100 placeholder:text-slate-300/60 focus-visible:outline-none"
         />
 
@@ -72,7 +95,7 @@ export function ChatComposer({ disabled, isStreaming, onSend, onStop }: ChatComp
         ) : (
           <Button
             type="submit"
-            disabled={disabled || value.trim().length === 0}
+            disabled={!canSend}
             aria-label="Send message"
             className="h-11 w-11 rounded-2xl bg-orange-300 text-zinc-950 hover:bg-orange-200"
             size="icon"

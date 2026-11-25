@@ -15,31 +15,39 @@ yarn dev                              # dev server
 yarn build                            # = prisma generate && next build; run after routing/API/schema changes
 yarn lint                             # eslint over the repo
 yarn eslint app/api/chats/route.ts    # lint a single file
+yarn test                             # jest (jsdom) + @testing-library/react
 docker compose up -d postgres         # local Postgres on :5432
 yarn prisma generate                  # regenerate client into lib/generated/prisma (also runs on postinstall)
 yarn prisma migrate dev --name <name>
 yarn prisma studio
 ```
 
-No test runner is configured and there are no test files. Do not invent a test command.
+Tests run on **jest** (`jest.config.mjs`, jsdom, setup in `jest.setup.ts`) with
+`@testing-library/react`. Suites live next to what they cover (`*.test.ts(x)`). Query by role/label,
+not by class name.
 
 ## Architecture
 
 ### Request path for a chat turn
 
-1. `app/(app)/chat/page.tsx` is a single 440-line client component that owns the whole chat UI — there is no
-   `/chat/[id]` route. Active chat lives in the Zustand store (`app/chatStore.ts`), not the URL.
-2. It POSTs `{ message }` to `app/api/chats/[chatId]/stream/route.ts`, which persists the user message,
-   lazily auto-titles the chat (only when `title === "New Plan"`, via a one-shot Gemini call, falling back
-   to the message's first 60 chars), bumps `lastMessageAt`, then loads the **last 24 messages** as history.
+1. `app/(app)/chat/page.tsx` is a thin (~60-line) client component that only composes — there is no
+   `/chat/[id]` route. Active chat lives in the Zustand store (`app/chatStore.ts`), not the URL. The
+   behavior sits in two hooks beside it: `useChats.ts` (list hydration, select/create/delete) and
+   `useChatStream.ts` (one turn: request, SSE consumption, `AbortController` ref, optimistic appends).
+2. It POSTs `{ message }` to `app/api/chats/[chatId]/stream/route.ts`. The route handler stays thin; the
+   turn's steps live in `lib/chat/turn.ts` (`persistUserMessage`, `autoTitleChat` — only when
+   `title === "New Plan"`, via a one-shot Gemini call falling back to the message's first 60 chars —
+   `touchChat`, `loadRecentHistory`, `persistAssistantMessage`) and `lib/chat/stream.ts` (the SSE body).
 3. That history — already including the just-persisted user message — is the entire prompt passed to
-   `streamCoachReply`; there is no separate "current message" argument. `COACH_INSTRUCTIONS` in the route is
-   the system prompt.
+   `streamCoachReply`; there is no separate "current message" argument. `COACH_INSTRUCTIONS` and the
+   caps/limits live in `lib/chat/constants.ts`.
 4. `lib/llama.ts` — **Gemini, despite the filename** — exposes `streamCoachReply` (async generator over
    Gemini's `?alt=sse` endpoint) and `generateText`, both retrying 429/500/502/503/504 with jittered
    backoff, 4 attempts. `buildContents` maps our `assistant` role to Gemini's `model`.
-5. The route re-encodes deltas as its own SSE protocol; the page hand-parses it in `parseSseChunk` and
-   cancels in-flight turns through an `AbortController` ref.
+5. The route re-encodes deltas as its own SSE protocol (encoder: `lib/sse.ts`). The client parses it in
+   `app/lib/chat-client/sse.ts` (`parseSseChunk` → a discriminated `ChatStreamEvent` union,
+   `createSseParser`, `readSseStream`) and cancels in-flight turns through an `AbortController` ref.
+   `app/lib/chat-client/api.ts` holds the typed fetch wrappers.
 
 ### The SSE contract (both sides are hand-written — change them together)
 
@@ -59,12 +67,16 @@ DB history stays consistent with what the user saw.
   `middleware.ts`) protects every route except `/`, `/sign-in(.*)`, `/sign-up(.*)`.
 - Route handlers additionally call `requireUserId()` from `lib/api.ts` and scope every Prisma query by
   `userId`. `ChatMessage` has **no** `userId` column — message ownership exists only through its `Chat`, so
-  every handler must first do `chat.findFirst({ where: { id, userId } })` and 404 before any read/write.
-  The middleware alone does not stop cross-user access.
+  every handler must first prove ownership and 404 before any read/write; the middleware alone does not
+  stop cross-user access. Use `requireOwnedChat(chatId, userId)` from `lib/api.ts` — the single place that
+  does this check (`prisma.chat.findFirst` appears exactly once in the repo, inside it):
+  `const { chat, error } = await requireOwnedChat(...); if (error) return error;`
 - All `/api/chats/*` responses use `ok(data)` / `fail({ code, message }, status)` →
   `{ success: true, data }` or `{ success: false, error }`. Codes in use: `UNAUTHORIZED`, `BAD_REQUEST`,
   `NOT_FOUND`, `INTERNAL_ERROR`.
-- Input caps live in the handlers: message ≤ 4000 chars, generated title ≤ 60, client-supplied title ≤ 80.
+- `lib/api.ts` also exports `unauthorized()/badRequest()/notFound()/internalError()` over `fail()`.
+- Input caps are named constants in `lib/chat/constants.ts`: message ≤ 4000 chars, generated title ≤ 60,
+  client-supplied title ≤ 80, history = last 24 messages.
 
 ### Routing layout
 
@@ -77,9 +89,9 @@ DB history stays consistent with what the user saw.
 ### Prisma
 
 - The client is generated to `lib/generated/prisma`, **not** `@prisma/client`. Always import the shared
-  instance from `@/lib/prisma`, which wires a `pg` `Pool` through `@prisma/adapter-pg` and throws at import
-  time if `DATABASE_URL` is missing. It creates the Pool/client at module scope with no `globalThis`
-  singleton guard, so dev HMR can accumulate connections — worth knowing when debugging pool exhaustion.
+  instance from `@/lib/prisma`, which wires a `pg` `Pool` through `@prisma/adapter-pg`, holds it behind a
+  `globalThis` singleton guard (so dev HMR reuses one pool), and throws at import
+  time if `DATABASE_URL` is missing.
 - `schema.prisma`'s `datasource db` block has no `url`; it comes from `prisma.config.ts`, which reads
   `DATABASE_URL` and `DIRECT_URL` (shadow DB) via `dotenv/config`.
 - `ChatMessage.chat` cascades on delete, so deleting a `Chat` clears its messages.
@@ -92,7 +104,9 @@ The app was originally built on OpenAI Assistants. Leftovers, kept but inert:
 - `app/api/assistant/*`, `app/api/thread`, `app/api/run/*`, `app/api/message/*` return **410** with raw
   `{ error }` bodies (not the `ok`/`fail` envelope) whose text still references `llama3.2` — stale wording
   from an intermediate Ollama phase.
-- `app/api/user-thread/route.ts` and the `Assistant` / `UserThread` models are unused by the chat flow.
+- `app/api/user-thread/route.ts` is the exception: it is still *live* (200 on GET) and will lazily create a
+  `UserThread` row with a random UUID, but nothing in the chat flow calls it. The `Assistant` /
+  `UserThread` models are otherwise unused.
 - `Chat.openaiThreadId`, `ChatMessage.openaiMessageId`, `ChatMessage.openaiResponseId` are never written.
 - `jotai` and `axios` are in `package.json` but imported nowhere — use Zustand and `fetch`.
 
@@ -106,7 +120,13 @@ New work belongs in `app/api/chats/**`. Don't extend the legacy routes.
 - Server Components by default; `"use client"` only where interactivity is needed.
 - Shared client types live in `app/types/chat.ts` (`ChatMessage`, `ChatPreview`); dates cross the wire as
   ISO strings, so handlers map Prisma `Date`s with `.toISOString()`.
-- Reuse `components/ui` primitives (shadcn new-york, slate base) and `cn()` from `lib/utils.ts`.
+- Reuse `components/ui` primitives (shadcn new-york, slate base) and `cn()` from `lib/utils.ts`. The
+  static pages compose `components/marketing/*` (`Section`, `PageHeading`, `SurfaceCard`, `CtaLink`,
+  `ContentPage`, `BrandMark`, `AuthShell`) — add to those rather than re-spelling class strings.
+- React Compiler is on: do not hand-add `useMemo`/`useCallback`/`React.memo` for performance.
+- Tailwind v4 — there is no `tailwind.config.*`; it loads via `@tailwindcss/postcss` in `postcss.config.mjs`
+  and all theme tokens are declared in an `@theme inline` block in `app/globals.css`. Edit that file, not a
+  config.
 - Match file-local formatting — most app files use semicolons and double quotes; some shadcn-style files
   omit semicolons. Don't reformat unrelated code.
 - Gemini's free tier is per API key, so the whole userbase shares one quota; there is no per-user rate
