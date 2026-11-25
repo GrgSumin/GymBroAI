@@ -1,3 +1,5 @@
+// Google Gemini REST client. The filename is a leftover from the Ollama phase;
+// every export here talks to Gemini's `v1beta` generateContent endpoints.
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export const CHAT_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
@@ -6,6 +8,14 @@ type GeminiPart = { text?: string };
 type GeminiCandidate = { content?: { parts?: GeminiPart[] } };
 type GeminiStreamChunk = { candidates?: GeminiCandidate[] };
 type GeminiGenerateResponse = { candidates?: GeminiCandidate[] };
+
+/** Gemini calls the assistant side of a conversation "model". */
+type GeminiRole = "user" | "model";
+type GeminiContent = { role: GeminiRole; parts: GeminiPart[] };
+type GeminiRequestBody = {
+  system_instruction: { parts: GeminiPart[] };
+  contents: GeminiContent[];
+};
 
 export type CoachTurn = {
   role: "user" | "assistant";
@@ -25,9 +35,13 @@ function getApiKey() {
   return key;
 }
 
-function buildContents(history: CoachTurn[]) {
+function toGeminiRole(role: CoachTurn["role"]): GeminiRole {
+  return role === "assistant" ? "model" : "user";
+}
+
+function buildContents(history: CoachTurn[]): GeminiContent[] {
   return history.map((turn) => ({
-    role: turn.role === "assistant" ? "model" : "user",
+    role: toGeminiRole(turn.role),
     parts: [{ text: turn.content }],
   }));
 }
@@ -40,6 +54,8 @@ function extractText(candidates: GeminiCandidate[] | undefined) {
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_JITTER_MS = 250;
 
 // Gemini delimits SSE events with CRLF; accept LF too so either wire format works.
 const SSE_EVENT_DELIMITER = /\r?\n\r?\n/;
@@ -77,31 +93,58 @@ function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-async function fetchGeminiWithRetry(
-  url: string,
-  init: RequestInit,
+/** Exponential backoff with jitter, so a shared quota does not retry in lockstep. */
+function backoffDelay(attempt: number) {
+  return BACKOFF_BASE_MS * 2 ** attempt + Math.floor(Math.random() * BACKOFF_JITTER_MS);
+}
+
+/**
+ * POST a Gemini request, retrying transient failures (429 plus 5xx) up to
+ * `MAX_ATTEMPTS` times. Any other status fails immediately.
+ */
+async function postGemini(
+  path: string,
+  body: GeminiRequestBody,
   signal?: AbortSignal
 ): Promise<Response> {
+  const init: RequestInit = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": getApiKey(),
+    },
+    body: JSON.stringify(body),
+    signal,
+  };
+
   let lastDetail = "";
   let lastStatus = 0;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const response = await fetch(url, init);
+    const response = await fetch(`${GEMINI_API_BASE}/${path}`, init);
 
     if (response.ok) return response;
 
     lastStatus = response.status;
     lastDetail = await response.text().catch(() => "");
 
-    if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS - 1) {
+    const isLastAttempt = attempt === MAX_ATTEMPTS - 1;
+
+    if (!RETRYABLE_STATUSES.has(response.status) || isLastAttempt) {
       break;
     }
 
-    const backoff = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
-    await sleep(backoff, signal);
+    await sleep(backoffDelay(attempt), signal);
   }
 
   throw new Error(`Gemini failed (${lastStatus}): ${lastDetail.slice(0, 400)}`);
+}
+
+function buildRequestBody(system: string, contents: GeminiContent[]): GeminiRequestBody {
+  return {
+    system_instruction: { parts: [{ text: system }] },
+    contents,
+  };
 }
 
 export async function* streamCoachReply(
@@ -109,22 +152,9 @@ export async function* streamCoachReply(
   system: string,
   signal?: AbortSignal
 ): AsyncGenerator<LlmDelta> {
-  const apiKey = getApiKey();
-
-  const response = await fetchGeminiWithRetry(
-    `${GEMINI_API_BASE}/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: system }] },
-        contents: buildContents(history),
-      }),
-      signal,
-    },
+  const response = await postGemini(
+    `models/${CHAT_MODEL}:streamGenerateContent?alt=sse`,
+    buildRequestBody(system, buildContents(history)),
     signal
   );
 
@@ -171,22 +201,9 @@ export async function generateText(
   system: string,
   signal?: AbortSignal
 ) {
-  const apiKey = getApiKey();
-
-  const response = await fetchGeminiWithRetry(
-    `${GEMINI_API_BASE}/models/${CHAT_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-      }),
-      signal,
-    },
+  const response = await postGemini(
+    `models/${CHAT_MODEL}:generateContent`,
+    buildRequestBody(system, [{ role: "user", parts: [{ text: prompt }] }]),
     signal
   );
 

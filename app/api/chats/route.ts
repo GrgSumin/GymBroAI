@@ -1,4 +1,6 @@
-import { fail, ok, requireUserId } from "@/lib/api";
+import { internalError, ok, requireUserId, unauthorized } from "@/lib/api";
+import { DEFAULT_CHAT_TITLE, MAX_CLIENT_TITLE_LENGTH } from "@/lib/chat/constants";
+import { serializeChat } from "@/lib/chat/serialize";
 import { prisma } from "@/lib/prisma";
 
 type CreateChatRequest = {
@@ -9,7 +11,7 @@ export async function GET() {
   const userId = await requireUserId();
 
   if (!userId) {
-    return fail({ code: "UNAUTHORIZED", message: "Sign in required." }, 401);
+    return unauthorized();
   }
 
   try {
@@ -25,18 +27,11 @@ export async function GET() {
     });
 
     return ok({
-      chats: chats.map((chat) => ({
-        id: chat.id,
-        title: chat.title,
-        updatedAt: chat.updatedAt.toISOString(),
-        createdAt: chat.createdAt.toISOString(),
-        lastMessageAt: chat.lastMessageAt?.toISOString() ?? null,
-        preview: chat.messages[0]?.content ?? "",
-      })),
+      chats: chats.map((chat) => serializeChat(chat, chat.messages[0]?.content ?? "")),
     });
   } catch (error) {
     console.error("Failed to load chats", error);
-    return fail({ code: "INTERNAL_ERROR", message: "Unable to load chats." }, 500);
+    return internalError("Unable to load chats.");
   }
 }
 
@@ -44,7 +39,7 @@ export async function POST(req: Request) {
   const userId = await requireUserId();
 
   if (!userId) {
-    return fail({ code: "UNAUTHORIZED", message: "Sign in required." }, 401);
+    return unauthorized();
   }
 
   let payload: CreateChatRequest;
@@ -55,7 +50,9 @@ export async function POST(req: Request) {
     payload = {};
   }
 
-  const title = payload.title?.trim() ? payload.title.trim().slice(0, 80) : "New Plan";
+  const title = payload.title?.trim()
+    ? payload.title.trim().slice(0, MAX_CLIENT_TITLE_LENGTH)
+    : DEFAULT_CHAT_TITLE;
 
   try {
     const chat = await prisma.chat.create({
@@ -65,21 +62,9 @@ export async function POST(req: Request) {
       },
     });
 
-    return ok(
-      {
-        chat: {
-          id: chat.id,
-          title: chat.title,
-          updatedAt: chat.updatedAt.toISOString(),
-          createdAt: chat.createdAt.toISOString(),
-          lastMessageAt: chat.lastMessageAt?.toISOString() ?? null,
-          preview: "",
-        },
-      },
-      201
-    );
+    return ok({ chat: serializeChat(chat, "") }, 201);
   } catch (error) {
     console.error("Failed to create chat", error);
-    return fail({ code: "INTERNAL_ERROR", message: "Unable to create chat." }, 500);
+    return internalError("Unable to create chat.");
   }
 }

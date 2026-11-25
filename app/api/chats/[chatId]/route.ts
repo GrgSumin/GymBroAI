@@ -1,4 +1,10 @@
-import { fail, ok, requireUserId } from "@/lib/api";
+import {
+  internalError,
+  ok,
+  requireOwnedChat,
+  requireUserId,
+  unauthorized,
+} from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 
 type Params = {
@@ -9,24 +15,19 @@ export async function DELETE(_: Request, { params }: Params) {
   const userId = await requireUserId();
 
   if (!userId) {
-    return fail({ code: "UNAUTHORIZED", message: "Sign in required." }, 401);
+    return unauthorized();
   }
 
   const { chatId } = await params;
 
   try {
-    const chat = await prisma.chat.findFirst({
-      where: {
-        id: chatId,
-        userId,
-      },
-      select: { id: true },
-    });
+    const { error } = await requireOwnedChat(chatId, userId);
 
-    if (!chat) {
-      return fail({ code: "NOT_FOUND", message: "Chat not found." }, 404);
+    if (error) {
+      return error;
     }
 
+    // ChatMessage.chat cascades, so this clears the chat's messages too.
     await prisma.chat.delete({
       where: { id: chatId },
     });
@@ -34,6 +35,6 @@ export async function DELETE(_: Request, { params }: Params) {
     return ok({ deleted: true });
   } catch (error) {
     console.error("Failed to delete chat", error);
-    return fail({ code: "INTERNAL_ERROR", message: "Unable to delete chat." }, 500);
+    return internalError("Unable to delete chat.");
   }
 }

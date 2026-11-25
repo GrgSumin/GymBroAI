@@ -1,4 +1,11 @@
-import { fail, ok, requireUserId } from "@/lib/api";
+import {
+  internalError,
+  ok,
+  requireOwnedChat,
+  requireUserId,
+  unauthorized,
+} from "@/lib/api";
+import { serializeMessage } from "@/lib/chat/serialize";
 import { prisma } from "@/lib/prisma";
 
 type Params = {
@@ -9,22 +16,16 @@ export async function GET(_: Request, { params }: Params) {
   const userId = await requireUserId();
 
   if (!userId) {
-    return fail({ code: "UNAUTHORIZED", message: "Sign in required." }, 401);
+    return unauthorized();
   }
 
   const { chatId } = await params;
 
   try {
-    const chat = await prisma.chat.findFirst({
-      where: {
-        id: chatId,
-        userId,
-      },
-      select: { id: true },
-    });
+    const { error } = await requireOwnedChat(chatId, userId);
 
-    if (!chat) {
-      return fail({ code: "NOT_FOUND", message: "Chat not found." }, 404);
+    if (error) {
+      return error;
     }
 
     const messages = await prisma.chatMessage.findMany({
@@ -32,17 +33,9 @@ export async function GET(_: Request, { params }: Params) {
       orderBy: { createdAt: "asc" },
     });
 
-    return ok({
-      messages: messages.map((message) => ({
-        id: message.id,
-        chatId: message.chatId,
-        role: message.role,
-        content: message.content,
-        createdAt: message.createdAt.toISOString(),
-      })),
-    });
+    return ok({ messages: messages.map(serializeMessage) });
   } catch (error) {
     console.error("Failed to load messages", error);
-    return fail({ code: "INTERNAL_ERROR", message: "Unable to load messages." }, 500);
+    return internalError("Unable to load messages.");
   }
 }

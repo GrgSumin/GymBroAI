@@ -8,7 +8,19 @@ if (!connectionString) {
   throw new Error("DATABASE_URL environment variable is not set");
 }
 
-const pool = new Pool({ connectionString });
-const adapter = new PrismaPg(pool);
+// Dev HMR re-evaluates this module on every edit; without a global cache each
+// reload would leak a Pool (and its sockets) and eventually exhaust Postgres.
+const globalForPrisma = globalThis as typeof globalThis & {
+  __gymbroPool?: Pool;
+  __gymbroPrisma?: PrismaClient;
+};
 
-export const prisma = new PrismaClient({ adapter });
+const pool = globalForPrisma.__gymbroPool ?? new Pool({ connectionString });
+
+export const prisma =
+  globalForPrisma.__gymbroPrisma ?? new PrismaClient({ adapter: new PrismaPg(pool) });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.__gymbroPool = pool;
+  globalForPrisma.__gymbroPrisma = prisma;
+}
