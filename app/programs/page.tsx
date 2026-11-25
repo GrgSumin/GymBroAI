@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { ContentPage } from "@/components/marketing/content-page";
+import { Body, CardHeading, SurfaceCard } from "@/components/marketing/section";
 
 const programs = [
   { name: "Lean Build", details: "4 days/week, hypertrophy focus, moderate volume." },
@@ -8,27 +9,21 @@ const programs = [
 
 export default function ProgramsPage() {
   return (
-    <div className="min-h-dvh bg-black px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-5xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-orange-200">GymBro Programs</p>
-        <h1 className="mt-3 text-4xl font-semibold uppercase text-white sm:text-5xl">Choose Your Training Track</h1>
-        <p className="mt-3 max-w-2xl text-sm text-slate-300/85 sm:text-base">
-          Pick a structure that fits your lifestyle, then personalize it inside chat coaching.
-        </p>
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-3">
-          {programs.map((program) => (
-            <article key={program.name} className="rounded-3xl bg-zinc-900 p-5">
-              <h2 className="text-lg font-semibold uppercase text-orange-200">{program.name}</h2>
-              <p className="mt-2 text-sm text-slate-300/85">{program.details}</p>
-            </article>
-          ))}
-        </div>
-
-        <Link href="/" className="mt-8 inline-flex text-sm font-semibold uppercase tracking-[0.1em] text-orange-300">
-          Back to Home
-        </Link>
+    <ContentPage
+      eyebrow="GymBro Programs"
+      title="Choose Your Training Track"
+      lead="Pick a structure that fits your lifestyle, then personalize it inside chat coaching."
+    >
+      <div className="grid gap-4 sm:grid-cols-3">
+        {programs.map((program) => (
+          <SurfaceCard key={program.name}>
+            <CardHeading as="h2" className="text-lg">
+              {program.name}
+            </CardHeading>
+            <Body className="mt-2">{program.details}</Body>
+          </SurfaceCard>
+        ))}
       </div>
-    </div>
+    </ContentPage>
   );
 }

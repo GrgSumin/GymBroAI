@@ -3,6 +3,8 @@ import { Space_Grotesk, Manrope, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 
+import { cn } from "@/lib/utils";
+
 const bodySans = Manrope({
   variable: "--font-display-sans",
   subsets: ["latin"],
@@ -39,7 +41,12 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en" className="dark">
         <body
-          className={`${bodySans.variable} ${headingSans.variable} ${mono.variable} min-h-dvh bg-black text-zinc-100 antialiased`}
+          className={cn(
+            bodySans.variable,
+            headingSans.variable,
+            mono.variable,
+            "min-h-dvh bg-black text-zinc-100 antialiased"
+          )}
         >
           {children}
         </body>
